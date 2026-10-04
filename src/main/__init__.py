@@ -35,22 +35,110 @@ class Facing(Enum):
 # Q1 机器人自检（题面 Q1·自检状态计算与报告生成）
 # ---------------------------------------------------------------------------
 def hp_ratio(hp, max_hp):
-    """TODO(Q1)：血量百分比，返回 0-100 的 int；计算与边界规则见题面 Q1 规范。"""
-    raise NotImplementedError("Q1 hp_ratio：题面 Q1·血量百分比与精度保障")
+    """Return a truncated HP percentage clamped to 0-100.
+
+    A nonpositive maximum HP returns zero. Integer inputs use integer
+    arithmetic to preserve precision even for very large HP values.
+    """
+    if max_hp <= 0 or hp <= 0:
+        return 0
+    if hp >= max_hp:
+        return 100
+    return int(hp * 100 // max_hp)
 
 
 def status_report(name, robot_type, hp, max_hp, battery):
-    """TODO(Q1)：一行自检报告字符串；档位判定与逐字符格式见题面 Q1 规范。"""
-    raise NotImplementedError("Q1 status_report：题面 Q1·电量映射与报告格式")
+    """Return the aligned self-check report with the battery status.
+
+    Battery readings at least 50 are OK; readings at least 20 are WARNING.
+    Lower readings are LOW. Display the battery reading as supplied.
+    """
+    if battery >= 50:
+        level = "OK"
+    elif battery >= 20:
+        level = "WARNING"
+    else:
+        level = "LOW"
+
+    percentage = hp_ratio(hp, max_hp)
+    return (f"{name:<10}|{robot_type:^10}|HP {percentage:>3}%|"
+            f"BAT {battery:>3}%|{level}")
 
 
 # ---------------------------------------------------------------------------
 # Q2 战斗日志分析（题面 Q2·多源日志解析与统计）
 # ---------------------------------------------------------------------------
 def analyze_damage_log(lines):
-    """TODO(Q2)：解析混合格式伤害日志，返回固定契约的统计 dict；
-    行格式、去重与统计口径见题面 Q2 规范。"""
-    raise NotImplementedError("Q2 analyze_damage_log：题面 Q2·多源日志解析与统计")
+    """Parse valid damage events, ignoring malformed and duplicate lines.
+
+    Each sensor segment counts as one event for the average. Reject the
+    entire sensor line if any segment is invalid. Ties use front, left,
+    then right. JSON IDs must be hashable; only valid rows reserve IDs.
+    Averages exceeding the float range return positive infinity.
+    """
+    by_armor = {"front": 0, "left": 0, "right": 0}
+    armor_names = {"F": "front", "L": "left", "R": "right"}
+    seen_ids = set()
+    event_count = 0
+
+    try:
+        iterator = iter(lines)
+    except TypeError:
+        iterator = iter(())
+
+    for line in iterator:
+        if not isinstance(line, str):
+            continue
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        try:
+            if line.startswith("{"):
+                record = json.loads(line)
+                armor = record["armor"]
+                damage = record["damage"]
+                if (armor not in by_armor or type(damage) is not int
+                        or damage <= 0):
+                    continue
+                if "id" in record:
+                    event_id = record["id"]
+                    if event_id in seen_ids:
+                        continue
+                    seen_ids.add(event_id)
+                events = [(armor, damage)]
+            else:
+                events = []
+                for segment in line.split(","):
+                    code, value = segment.split(":")
+                    code, value = code.strip(), value.strip()
+                    if (code not in armor_names or not value
+                            or any(char not in "0123456789"
+                                   for char in value)):
+                        raise ValueError("Invalid sensor segment")
+                    damage = int(value)
+                    if damage <= 0:
+                        raise ValueError("Damage must be positive")
+                    events.append((armor_names[code], damage))
+        except (KeyError, TypeError, ValueError, RecursionError):
+            continue
+
+        for armor, damage in events:
+            by_armor[armor] += damage
+            event_count += 1
+
+    total = sum(by_armor.values())
+    try:
+        average = round(total / event_count, 2) if event_count else 0.0
+    except OverflowError:
+        average = float("inf")
+
+    return {
+        "total": total,
+        "by_armor": by_armor,
+        "most_hit": max(by_armor, key=by_armor.get) if event_count else None,
+        "avg": average,
+    }
 
 
 # ---------------------------------------------------------------------------
