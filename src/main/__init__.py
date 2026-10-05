@@ -283,9 +283,40 @@ class SentryGrid:
 # Q4 贪心导航（题面 Q4·单步贪心导航策略）
 # ---------------------------------------------------------------------------
 def next_step_toward(pos, target, obstacles, current_facing=Facing.UP):
-    """TODO(Q4)：返回下一步应朝向的 Facing；
-    候选判定、优先级与回退规则见题面 Q4 规范。"""
-    raise NotImplementedError("Q4 next_step_toward：题面 Q4·贪心策略与回退")
+    """Choose an unblocked direction that reduces Manhattan distance.
+
+    Prefer the axis with the larger gap; ties favor the horizontal axis.
+    Return the current facing when no direction reduces the distance.
+    """
+    x, y = pos
+    tx, ty = target
+    distance = abs(tx - x) + abs(ty - y)
+    candidates = []
+
+    for facing in Facing:
+        dx, dy = facing.delta
+        next_pos = (x + dx, y + dy)
+        if next_pos in obstacles:
+            continue
+        next_x, next_y = next_pos
+        next_distance = abs(tx - next_x) + abs(ty - next_y)
+        if next_distance < distance:
+            candidates.append(facing)
+
+    if not candidates:
+        return current_facing
+
+    x_gap = abs(tx - x)
+    y_gap = abs(ty - y)
+    if x_gap >= y_gap:
+        preferred = (Facing.LEFT, Facing.RIGHT)
+    else:
+        preferred = (Facing.UP, Facing.DOWN)
+    for facing in candidates:
+        if facing in preferred:
+            return facing
+
+    return candidates[0]
 
 
 # ---------------------------------------------------------------------------
