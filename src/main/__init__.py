@@ -332,16 +332,90 @@ class SentryState(Enum):
     RETURN = "RETURN"
 
 
+def _nonnegative_int(value, default=0):
+    """Normalize numeric fields without raising for invalid values."""
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def decide(sensor, state, hp, heat):
-    """TODO(Q5)：纯函数决策，返回 (action: str, new_state: SentryState)；
-    sensor 字段契约、R1-R7 规则表与非法输入处理见题面 Q5 规范。"""
-    sensor = {
-        "enemy_frames": (True, False, True),
-        "enemy_dist": 3,
-        "robot_type": "INFANTRY",
-        "max_hp": 120,
-    }
-    raise NotImplementedError("Q5 decide：题面 Q5·决策规则表 R1-R7")
+    """Apply R1-R7 in order without changing the input data.
+
+    Use 60 percent HP for recovery and three consecutive missing frames
+    for sustained loss. These thresholds are not specified in the brief.
+    Invalid frame types become one missing frame; unknown distances are
+    treated as out of range, and unknown robot types become INFANTRY.
+    Invalid HP values become zero. Numeric fields use nonnegative ints.
+    Heat does not alter any action in the published rule table.
+    """
+    required_fields = ("enemy_frames", "enemy_dist", "robot_type", "max_hp")
+    if not isinstance(sensor, dict) or any(
+            field not in sensor for field in required_fields):
+        raise ValueError("Sensor must contain all required fields")
+    if not isinstance(state, SentryState):
+        raise ValueError("State must be a SentryState member")
+
+    frames = sensor["enemy_frames"]
+    if isinstance(frames, (tuple, list)):
+        if not 1 <= len(frames) <= 6:
+            raise ValueError("Frame history must contain 1-6 frames")
+        frames = tuple(bool(frame) for frame in frames)
+    else:
+        frames = (False,)
+
+    enemy_dist = _nonnegative_int(sensor["enemy_dist"], default=4)
+    robot_type = sensor["robot_type"]
+    if isinstance(robot_type, str):
+        robot_type = robot_type.strip().upper()
+    if robot_type != "HERO":
+        robot_type = "INFANTRY"
+    hp_pct = hp_ratio(_nonnegative_int(hp),
+                      _nonnegative_int(sensor["max_hp"]))
+    visible = frames[-1]
+
+    # R1: Low HP overrides every state and combat condition.
+    if hp_pct <= 30:
+        return "RETREAT", SentryState.RETREAT
+
+    # R2: Remain in retreat until the recovery threshold is reached.
+    if state == SentryState.RETREAT:
+        if hp_pct >= 60:
+            return "RETURN", SentryState.RETURN
+        return "RETREAT", SentryState.RETREAT
+
+    # R3: RETURN is a single-frame transition, regardless of visibility.
+    if state == SentryState.RETURN:
+        return "MOVE_BASE", SentryState.PATROL
+
+    if enemy_dist <= 3:
+        combat_action = "SHOOT"
+    elif robot_type == "HERO":
+        combat_action = "MOVE_RIGHT"
+    else:
+        combat_action = "MOVE_LEFT"
+
+    # R4: An engaged sentry acts immediately on the current detection.
+    if state == SentryState.ENGAGE and visible:
+        return combat_action, SentryState.ENGAGE
+
+    # R5: Only consecutive missing frames count toward losing the target.
+    if state == SentryState.ENGAGE:
+        if len(frames) >= 3 and not any(frames[-3:]):
+            return "SCAN", SentryState.SUSPECT
+        return "HOLD_FIRE", SentryState.ENGAGE
+
+    # R6: PATROL and SUSPECT require two consecutive detections.
+    if visible:
+        if len(frames) >= 2 and frames[-2]:
+            return combat_action, SentryState.ENGAGE
+        return "SCAN", SentryState.SUSPECT
+
+    # R7: No detection means patrol movement or continued scanning.
+    if state == SentryState.PATROL:
+        return "PATROL_MOVE", SentryState.PATROL
+    return "SCAN", SentryState.SUSPECT
 
 
 # ---------------------------------------------------------------------------
